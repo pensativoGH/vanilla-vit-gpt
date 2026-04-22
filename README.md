@@ -69,4 +69,4 @@ Final training loss settles around ~1.7–2.0 (noisy due to the tiny batch size 
 
 ## Running
 
-Each notebook is self-contained. Open in Jupyter and run top-to-bottom. The data paths (`./cifar10/` for ViT, `./data/tinyshakespeare/input.txt` for GPT) are hardcoded — drop the files in place before training.
+Each notebook is self-contained. Open in Jupyter and run top-to-bottom. The data paths default to `../cifar10/` for ViT and `./data/tinyshakespeare/input.txt` for GPT — edit the path in the data-loading cell of each notebook to point at wherever you've downloaded the files locally.
