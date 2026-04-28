@@ -1,0 +1,11 @@
+{
+  "patch_size": 16,
+  "patch_dim": 768,
+  "num_patches": 196,
+  "num_classes": 10,
+  "device": "cuda",
+  "model_dim": 256,
+  "num_heads": 4,
+  "num_blocks": 4,
+  "pos_emb_type": "rope"
+}

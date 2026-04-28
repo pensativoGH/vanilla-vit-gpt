@@ -1,8 +1,6 @@
-"""Vision language model that pairs the custom ViT with the custom GPT.
+"""Vision language model that pairs the custom ViT/Siglip with the custom GPT."""
 
-The vision encoder is frozen during VLM training; only the projector and
-language model receive gradient updates.
-"""
+
 
 from __future__ import annotations
 
@@ -14,16 +12,48 @@ from GPT import Linear
 from configs import ConfigParametersVLM
 
 
+class CustomViTAdapter(nn.Module):
+      def __init__(self, vit: nn.Module) -> None:
+          super().__init__()
+          self.vit = vit
+          self.model_dim = vit.model_dim
+    
+      def get_image_tokens(self, x: Tensor) -> Tensor:
+          # returns [B, N, D] without CLS token
+          return self.vit.encode(x)
+
+      def forward(self, x: Tensor) -> Tensor:
+          return self.get_image_tokens(x)
+
+
+class SigLIPAdapter(nn.Module):
+      def __init__(self, siglip_vision_model: nn.Module) -> None:
+          super().__init__()
+          self.model = siglip_vision_model
+          self.model_dim = self.model.config.hidden_size
+         
+
+      def get_image_tokens(self, x: Tensor) -> Tensor:
+          outputs = self.model(pixel_values=x)
+          tokens = outputs.last_hidden_state   # [B, N, D]
+          return tokens
+
+      def forward(self, x: Tensor) -> Tensor:
+          return self.get_image_tokens(x)
+
+
 class VLM(nn.Module):
     """Vision language model: frozen ViT -> projector -> GPT."""
 
     def __init__(self, cfg: ConfigParametersVLM) -> None:
         super().__init__()
+     
         self.vision_encoder = cfg.vision_encoder
         self.LLM = cfg.LLM
         self.model_dim = cfg.model_dim
         self.vision_model_dim = cfg.vision_model_dim
         self.vision_proj = Linear(cfg.vision_model_dim, cfg.model_dim)
+        self.pos_emb_type = cfg.pos_emb_type
 
 
     def forward(
@@ -34,15 +64,17 @@ class VLM(nn.Module):
         attention_mask: Tensor | None = None,
     ) -> tuple[Tensor, Tensor | float]:
         """Run image + text through the VLM and optionally compute loss."""
-        img_logits = self.vision_encoder.encode(x_img)
+        img_logits = self.vision_encoder(x_img)
         img_embeddings = self.vision_proj(img_logits)
         text_embeddings = self.LLM.token_embeddings(x_text)
         llm_embeddings = torch.cat([img_embeddings, text_embeddings], dim=1)
 
-        pos_embeddings = self.LLM.pos_emb(
-            torch.arange(llm_embeddings.shape[1], device=llm_embeddings.device)
-        )
-        llm_embeddings = llm_embeddings + pos_embeddings
+        #add position embeddings if absolute position embedding type is provided, skip if rope is used
+        if self.pos_emb_type is None or self.pos_emb_type == "absolute":
+            pos_embeddings = self.LLM.pos_emb(
+                torch.arange(llm_embeddings.shape[1], device=llm_embeddings.device)
+            )
+            llm_embeddings = llm_embeddings + pos_embeddings
 
         B, N, _ = img_embeddings.shape
 
@@ -80,8 +112,9 @@ class VLM(nn.Module):
         B, N, _ = img_embeddings.shape
         device = llm_embeddings.device
 
-        pos_ids = torch.arange(llm_embeddings.shape[1], device=device)
-        llm_embeddings = llm_embeddings + self.LLM.pos_emb(pos_ids)
+        if self.pos_emb_type is None or self.pos_emb_type == "absolute":
+            pos_ids = torch.arange(llm_embeddings.shape[1], device=device)
+            llm_embeddings = llm_embeddings + self.LLM.pos_emb(pos_ids)
 
         if attention_mask is not None:
             img_mask = torch.ones((B, N), dtype=attention_mask.dtype, device=device)
@@ -115,8 +148,14 @@ class VLM(nn.Module):
             if finished.all():
                 break
 
-            next_pos = torch.tensor([llm_embeddings.shape[1]], device=device)
-            next_emb = self.LLM.token_embeddings(next_ids) + self.LLM.pos_emb(next_pos)
+            
+            next_emb = self.LLM.token_embeddings(next_ids)
+
+            #add position embeddings if absolute position embedding type is provided, skip if rope is used
+            if self.pos_emb_type is None or self.pos_emb_type == "absolute":
+                next_pos = torch.tensor([llm_embeddings.shape[1]], device=device)
+                next_emb = next_emb + self.LLM.pos_emb(next_pos)
+
             llm_embeddings = torch.cat([llm_embeddings, next_emb], dim=1)
 
             if attention_mask is not None:

@@ -100,6 +100,7 @@ class ConfigParametersVLM:
     vision_encoder: Optional[object] = None
     LLM: Optional[object] = None
     batch_size: int = 32
+    pos_emb_type: str | None = "rope"
 
 
     @classmethod

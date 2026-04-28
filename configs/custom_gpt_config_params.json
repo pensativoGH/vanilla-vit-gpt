@@ -1,0 +1,9 @@
+{
+  "vocab_size": 50257,
+  "num_blocks": 4,
+  "chunk_size": 512,
+  "model_dim": 768,
+  "num_heads": 4,
+  "max_seq_length": 512,
+  "pos_emb_type": "rope"
+}

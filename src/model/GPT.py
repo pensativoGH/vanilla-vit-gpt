@@ -190,8 +190,10 @@ class GPT(nn.Module):
 
     def input_embeddings(self, x: Tensor, pos_emb_type: str | None = None) -> Tensor:
         """Add token and position embeddings for integer token ids."""
+        
         _, seq_len = x.shape
         token_embeddings = self.token_embeddings(x)
+
         if pos_emb_type is None or pos_emb_type != "rope":
             pos_embeddings = self.pos_emb(torch.arange(seq_len, device=self.device))
             return token_embeddings + pos_embeddings
