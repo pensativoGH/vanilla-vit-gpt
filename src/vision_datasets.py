@@ -253,6 +253,92 @@ class VisualGenomeQADataset(Dataset):
 
 
 # ---------------------------------------------------------------------------
+# LLaVA pretrain dataset (image + instruction + answer)
+# ---------------------------------------------------------------------------
+
+class LlavaPretrainDataset(Dataset):
+    """LLaVA pretrain samples in the shared VQA-style format."""
+
+    def __init__(
+        self,
+        split: str,
+        tokenizer,
+        transform: Callable,
+        max_len: int = 256,
+        data_dir: str = "/home/pensativo/datasets/LLaVA-Pretrain-558K",
+        image_root: str | None = None,
+        val_fraction: float = 0.01,
+        seed: int = 42,
+        limit: int | None = None,
+    ) -> None:
+        if split not in {"train", "val"}:
+            raise ValueError(f"split must be 'train' or 'val', got {split!r}")
+
+        self.transform = transform
+        self.tokenizer = tokenizer
+        self.eos = tokenizer.eos_token_id
+
+        if tokenizer.pad_token_id is None:
+            tokenizer.pad_token = tokenizer.eos_token
+        self.pad_id = tokenizer.pad_token_id
+
+        self.max_len = max_len
+        self.root = image_root or os.path.join(data_dir, "images")
+
+        ann_path = os.path.join(data_dir, "blip_laion_cc_sbu_558k.json")
+        with open(ann_path) as f:
+            data = json.load(f)
+
+        rng = np.random.default_rng(seed)
+        indices = rng.permutation(len(data))
+        val_size = max(1, int(len(data) * val_fraction))
+
+        if split == "train":
+            split_indices = indices[val_size:]
+        else:
+            split_indices = indices[:val_size]
+
+        self.data = [data[i] for i in split_indices]
+
+        if limit is not None:
+            self.data = self.data[:limit]
+
+    def __len__(self) -> int:
+        return len(self.data)
+
+    def __getitem__(self, idx: int) -> dict:
+        item = self.data[idx]
+
+        img = Image.open(os.path.join(self.root, item["image"])).convert("RGB")
+        img = self.transform(img)
+
+        human_turn = next(turn for turn in item["conversations"] if turn["from"] == "human")
+        gpt_turn = next(turn for turn in item["conversations"] if turn["from"] == "gpt")
+
+        question = human_turn["value"].replace("<image>", "").strip()
+        answer = gpt_turn["value"].strip()
+
+        q_ids = self.tokenizer(question, add_special_tokens=False)["input_ids"]
+        a_ids = self.tokenizer(answer, add_special_tokens=False)["input_ids"] + [self.eos]
+
+        text_ids = (q_ids + a_ids)[:self.max_len]
+        text_tokens = torch.tensor(text_ids, dtype=torch.long)
+
+        targets = text_tokens.clone()
+        targets[:-1] = text_tokens[1:]
+        targets[-1] = self.eos
+
+        q_len = min(len(q_ids), len(text_tokens))
+        targets[:q_len] = -100
+
+        return {
+            "image": img,
+            "text_tokens": text_tokens,
+            "targets": targets,
+        }
+
+
+# ---------------------------------------------------------------------------
 # COCO Captions dataset (image + caption)
 # ---------------------------------------------------------------------------
 
@@ -373,7 +459,7 @@ def build_coco_dataloaders(
     tokenizer,
     transform: Callable = val_tfm,
     batch_size: int = 32,
-    max_len: int = 64,
+    max_len: int = 256,
     data_dir: str = "./data/coco",
     num_workers: int = 4,
     train_limit: int | None = None,
@@ -438,6 +524,60 @@ def build_visual_genome_qa_dataloaders(
         max_len=max_len,
         data_dir=data_dir,
         image_root=image_root,
+        limit=val_limit,
+    )
+
+    train_loader = DataLoader(
+        train_ds,
+        batch_size=batch_size,
+        shuffle=True,
+        num_workers=num_workers,
+        collate_fn=lambda batch: vqa_collate_fn(batch, train_ds.pad_id),
+    )
+    val_loader = DataLoader(
+        val_ds,
+        batch_size=batch_size,
+        shuffle=False,
+        num_workers=num_workers,
+        collate_fn=lambda batch: vqa_collate_fn(batch, val_ds.pad_id),
+    )
+    return train_loader, val_loader
+
+
+def build_llava_pretrain_dataloaders(
+    tokenizer,
+    transform: Callable = val_tfm,
+    batch_size: int = 32,
+    max_len: int = 256,
+    data_dir: str = "/home/pensativo/datasets/LLaVA-Pretrain-558K",
+    image_root: str | None = None,
+    val_fraction: float = 0.01,
+    seed: int = 42,
+    num_workers: int = 2,
+    train_limit: int | None = None,
+    val_limit: int | None = None,
+) -> tuple[DataLoader, DataLoader]:
+    """Build train + val dataloaders for the local LLaVA pretrain dataset."""
+    train_ds = LlavaPretrainDataset(
+        "train",
+        tokenizer,
+        transform,
+        max_len=max_len,
+        data_dir=data_dir,
+        image_root=image_root,
+        val_fraction=val_fraction,
+        seed=seed,
+        limit=train_limit,
+    )
+    val_ds = LlavaPretrainDataset(
+        "val",
+        tokenizer,
+        transform,
+        max_len=max_len,
+        data_dir=data_dir,
+        image_root=image_root,
+        val_fraction=val_fraction,
+        seed=seed,
         limit=val_limit,
     )
 

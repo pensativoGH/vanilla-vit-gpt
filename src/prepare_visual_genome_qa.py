@@ -11,16 +11,23 @@ This script:
 from __future__ import annotations
 
 import argparse
+import contextlib
 import json
 import math
 import random
+import shutil
+import time
 import urllib.request
 import zipfile
 from pathlib import Path
+from urllib.error import URLError
 
 
 IMAGE_DATA_URL = "https://homes.cs.washington.edu/~ranjay/visualgenome/data/dataset/image_data.json.zip"
 QUESTION_ANSWERS_URL = "https://homes.cs.washington.edu/~ranjay/visualgenome/data/dataset/question_answers.json.zip"
+REQUEST_HEADERS = {"User-Agent": "Mozilla/5.0"}
+DOWNLOAD_TIMEOUT_SECS = 20
+DOWNLOAD_RETRIES = 3
 
 
 def download_file(url: str, out_path: Path) -> None:
@@ -29,6 +36,13 @@ def download_file(url: str, out_path: Path) -> None:
         return
     print(f"Downloading {url} -> {out_path}")
     urllib.request.urlretrieve(url, out_path)
+
+
+def download_url_to_path(url: str, out_path: Path) -> None:
+    req = urllib.request.Request(url, headers=REQUEST_HEADERS)
+    with contextlib.closing(urllib.request.urlopen(req, timeout=DOWNLOAD_TIMEOUT_SECS)) as resp:
+        with open(out_path, "wb") as f:
+            shutil.copyfileobj(resp, f)
 
 
 def load_zipped_json(zip_path: Path) -> list[dict]:
@@ -72,6 +86,7 @@ def build_samples(records: list[dict], image_id_to_name: dict[int, str]) -> list
 def download_images(image_records: list[dict], image_dir: Path) -> None:
     image_dir.mkdir(parents=True, exist_ok=True)
     total = len(image_records)
+    failures = 0
     for i, item in enumerate(image_records, start=1):
         url = item["url"]
         file_name = Path(url).name
@@ -81,7 +96,27 @@ def download_images(image_records: list[dict], image_dir: Path) -> None:
 
         if i % 500 == 1 or i == total:
             print(f"Downloading image {i}/{total}")
-        urllib.request.urlretrieve(url, out_path)
+        success = False
+        for attempt in range(1, DOWNLOAD_RETRIES + 1):
+            try:
+                download_url_to_path(url, out_path)
+                success = True
+                break
+            except (URLError, TimeoutError, OSError) as e:
+                if out_path.exists():
+                    out_path.unlink(missing_ok=True)
+                if attempt < DOWNLOAD_RETRIES:
+                    print(f"Retrying {file_name} ({attempt}/{DOWNLOAD_RETRIES}) after: {e}")
+                    time.sleep(1)
+                else:
+                    failures += 1
+                    print(f"Skipping {file_name} after {DOWNLOAD_RETRIES} failed attempts: {e}")
+
+        if not success:
+            continue
+
+    if failures:
+        print(f"Skipped {failures} image downloads due to transient errors")
 
 
 def main() -> None:

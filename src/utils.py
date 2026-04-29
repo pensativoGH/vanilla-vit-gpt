@@ -68,6 +68,11 @@ def vision_encoder_from_config(vision_cfg: dict, device) -> nn.Module:
     if vision_cfg["type"] == "siglip":
         model_name = vision_cfg["model_name"]
         siglip = SiglipVisionModel.from_pretrained(model_name)
+
+        if vision_cfg.get("freeze", False):
+            for param in siglip.parameters():
+                param.requires_grad = False
+
         siglip = siglip.to(device)
 
         if "checkpoint_path" in vision_cfg:

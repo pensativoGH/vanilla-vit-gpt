@@ -31,9 +31,7 @@ class SigLIPAdapter(nn.Module):
           super().__init__()
           self.model = siglip_vision_model
           self.model_dim = self.model.config.hidden_size
-
-          for param in self.model.parameters():
-              param.requires_grad = False
+        
          
 
       def get_image_tokens(self, x: Tensor) -> Tensor:
